@@ -323,26 +323,27 @@ export async function toggleOrCreateHabitOnGitHub(
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github.v3+json',
     'Authorization': `Bearer ${config.token.trim()}`,
-    'Cache-Control': 'no-cache, no-store, must-revalidate',
-    'Pragma': 'no-cache',
+  };
+
+  const putHeaders: Record<string, string> = {
+    'Accept': 'application/vnd.github.v3+json',
+    'Authorization': `Bearer ${config.token.trim()}`,
+    'Content-Type': 'application/json',
   };
 
   const putUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${filePath}`;
 
   // Execute with 1 automatic retry on 409 conflict
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const getUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${filePath}?ref=${config.branch}&_nocache=${Date.now()}`;
-    const getRes = await fetch(getUrl, { headers, cache: 'no-store' });
+    const getUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${filePath}?ref=${config.branch}&_t=${Date.now()}`;
+    const getRes = await fetch(getUrl, { headers });
 
     if (getRes.status === 404) {
       // File does not exist yet: create new journal file with habit
       const newContent = `- ### habit-tracker\n\t- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker\n`;
       const putRes = await fetch(putUrl, {
         method: 'PUT',
-        headers: {
-          ...headers,
-          'Content-Type': 'application/json',
-        },
+        headers: putHeaders,
         body: JSON.stringify({
           message: `chore: track ${habitName} as ${newCompletedState ? 'DONE' : 'UNDONE'} for ${dateInt}`,
           content: utf8ToBase64(newContent),
@@ -420,10 +421,7 @@ export async function toggleOrCreateHabitOnGitHub(
 
     const putRes = await fetch(putUrl, {
       method: 'PUT',
-      headers: {
-        ...headers,
-        'Content-Type': 'application/json',
-      },
+      headers: putHeaders,
       body: JSON.stringify({
         message: `chore: mark ${habitName} as ${newCompletedState ? 'DONE' : 'UNDONE'} for ${dateInt}`,
         content: utf8ToBase64(updatedContent),

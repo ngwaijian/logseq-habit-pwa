@@ -36,6 +36,20 @@ import {
 const hdMY = new Holidays('MY');
 const hdAU = new Holidays('AU', 'VIC');
 
+function getMYPublicHoliday(d: Date) {
+  const list = hdMY.isHoliday(d);
+  if (!list) return false;
+  const filtered = list.filter((h: any) => h.type === 'public');
+  return filtered.length > 0 ? filtered : false;
+}
+
+function getAUPublicHoliday(d: Date) {
+  const list = hdAU.isHoliday(d);
+  if (!list) return false;
+  const filtered = list.filter((h: any) => h.type === 'public');
+  return filtered.length > 0 ? filtered : false;
+}
+
 const PREFERRED_ORDER = ["Meditation", "Exercise", "Reading", "Flying", "Others"];
 
 const BIRTHDAYS: Record<string, string[]> = {
@@ -542,8 +556,8 @@ export default function App() {
                   const isWeekend = getDay(dateObj) === 0 || getDay(dateObj) === 6;
                   const isToday = now.getFullYear() === year && now.getMonth() === month - 1 && now.getDate() === day;
 
-                  const myHolidays = hdMY.isHoliday(dateObj);
-                  const auHolidays = hdAU.isHoliday(dateObj);
+                  const myHolidays = getMYPublicHoliday(dateObj);
+                  const auHolidays = getAUPublicHoliday(dateObj);
                   const mySchoolHolidays = isMYSchoolHoliday(dateObj);
                   const bdays = getBirthdays(dateObj);
 
@@ -752,8 +766,8 @@ export default function App() {
                           const dateObj = new Date(year, monthIndex, d);
                           const isWeekend = getDay(dateObj) === 0 || getDay(dateObj) === 6;
 
-                          const myHolidays = hdMY.isHoliday(dateObj);
-                          const auHolidays = hdAU.isHoliday(dateObj);
+                          const myHolidays = getMYPublicHoliday(dateObj);
+                          const auHolidays = getAUPublicHoliday(dateObj);
                           const mySchoolHolidays = isMYSchoolHoliday(dateObj);
                           const bdays = getBirthdays(dateObj);
 
@@ -832,8 +846,8 @@ export default function App() {
                       </th>
                       {daysArray.map(day => {
                         const dateObj = new Date(year, month - 1, day);
-                        const myHolidays = hdMY.isHoliday(dateObj);
-                        const auHolidays = hdAU.isHoliday(dateObj);
+                        const myHolidays = getMYPublicHoliday(dateObj);
+                        const auHolidays = getAUPublicHoliday(dateObj);
                         const isWeekend = getDay(dateObj) === 0 || getDay(dateObj) === 6;
                         const mySchoolHolidays = isMYSchoolHoliday(dateObj);
                         const bdays = getBirthdays(dateObj);
@@ -1021,7 +1035,7 @@ export default function App() {
                     </span>
                   ))}
                   {(() => {
-                    const h = hdMY.isHoliday(selectedDayObj);
+                    const h = getMYPublicHoliday(selectedDayObj);
                     return h ? (
                       <span className="px-2 py-0.5 rounded-full bg-yellow-100 dark:bg-yellow-950/60 text-yellow-800 dark:text-yellow-300 font-semibold flex items-center gap-1">
                         ★ MY: {h.map((item: any) => item.name).join(', ')}

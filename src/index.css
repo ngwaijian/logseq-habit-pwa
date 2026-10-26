@@ -41,11 +41,18 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 
 /* iOS Safe Area Insets for iPhone PWA / Fullscreen Notch & Dynamic Island */
 .safe-header {
-  padding-top: calc(env(safe-area-inset-top, 0px) + 0.625rem);
+  padding-top: max(calc(env(safe-area-inset-top, 0px) + 16px), 64px);
 }
+
+@media (min-width: 640px) {
+  .safe-header {
+    padding-top: 14px;
+  }
+}
+
 .safe-bottom {
-  padding-bottom: max(env(safe-area-inset-bottom, 0px), 12px);
+  padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
 }
 .safe-sheet-bottom {
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+  padding-bottom: max(calc(env(safe-area-inset-bottom, 0px) + 1rem), 28px);
 }

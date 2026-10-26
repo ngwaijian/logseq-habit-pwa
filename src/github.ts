@@ -250,6 +250,58 @@ export async function getMonthHabitsFromGitHub(year: number, month: number, onPr
   return records;
 }
 
+// Fetch habits for an entire year
+export async function getYearHabitsFromGitHub(year: number, onProgress?: (msg: string) => void): Promise<HabitRecord[]> {
+  const config = getGitHubConfig();
+  if (!config.token) {
+    throw new Error('Please configure your GitHub Personal Access Token in Settings.');
+  }
+
+  onProgress?.('Fetching journal file list...');
+  const allFiles = await fetchJournalFileList(config);
+
+  const yearPrefixUnderscore = `${year}_`;
+  const yearPrefixDash = `${year}-`;
+
+  const yearFiles = allFiles.filter(f => {
+    const filename = f.path.split('/').pop() || '';
+    return filename.startsWith(yearPrefixUnderscore) || filename.startsWith(yearPrefixDash);
+  });
+
+  if (yearFiles.length === 0) {
+    return [];
+  }
+
+  const records: HabitRecord[] = [];
+  let loaded = 0;
+
+  const BATCH_SIZE = 15;
+  for (let i = 0; i < yearFiles.length; i += BATCH_SIZE) {
+    const batch = yearFiles.slice(i, i + BATCH_SIZE);
+    await Promise.all(
+      batch.map(async file => {
+        try {
+          const filename = file.path.split('/').pop() || '';
+          const match = filename.match(/^(\d{4})[_-](\d{2})[_-](\d{2})\.md$/);
+          if (!match) return;
+
+          const dateInt = parseInt(`${match[1]}${match[2]}${match[3]}`);
+          const markdown = await fetchFileContent(config, file.path, file.sha);
+          const dayHabits = parseJournalMarkdown(markdown, dateInt, file.path, file.sha);
+          records.push(...dayHabits);
+
+          loaded++;
+          onProgress?.(`Reading journals (${loaded}/${yearFiles.length})...`);
+        } catch (err) {
+          console.error(`Error processing ${file.path}:`, err);
+        }
+      })
+    );
+  }
+
+  return records;
+}
+
 // Toggle habit checkmark and update GitHub
 export async function toggleHabitOnGitHub(record: HabitRecord, newCompletedState: boolean): Promise<HabitRecord> {
   const config = getGitHubConfig();

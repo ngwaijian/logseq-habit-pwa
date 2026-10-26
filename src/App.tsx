@@ -20,6 +20,7 @@ import {
   CheckCircle2, 
   AlertCircle,
   CalendarDays,
+  CalendarRange,
   LayoutGrid
 } from 'lucide-react';
 import Holidays from 'date-holidays';
@@ -28,6 +29,7 @@ import {
   getGitHubConfig, 
   saveGitHubConfig, 
   getMonthHabitsFromGitHub, 
+  getYearHabitsFromGitHub,
   toggleHabitOnGitHub 
 } from './github';
 
@@ -67,6 +69,8 @@ function isMYSchoolHoliday(d: Date): boolean {
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const YEAR_WEEKDAYS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const MONTHS_LIST = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
 export default function App() {
   const [currentDate, setCurrentDate] = useState<Date>(new Date());
@@ -76,13 +80,14 @@ export default function App() {
   const [errorMsg, setErrorMsg] = useState<string>('');
   const [showSettings, setShowSettings] = useState<boolean>(false);
 
-  // View state: 'calendar' (fits entire month on mobile screen!) or 'table' (matrix)
-  const [viewMode, setViewMode] = useState<'calendar' | 'table'>(() => {
-    return (localStorage.getItem('logseq_habit_view_mode') as 'calendar' | 'table') || 'calendar';
+  // View state: 'calendar' (Month), 'year' (Yearly 12-month dashboard), or 'table' (Matrix)
+  const [viewMode, setViewMode] = useState<'calendar' | 'year' | 'table'>(() => {
+    return (localStorage.getItem('logseq_habit_view_mode') as any) || 'calendar';
   });
 
-  // Selected habit in calendar view ('all' or specific habit name)
+  // Selected habit in calendar / yearly view ('all' or specific habit name)
   const [selectedHabit, setSelectedHabit] = useState<string>('all');
+  const [selectedYearlyHabit, setSelectedYearlyHabit] = useState<string>('Meditation');
 
   // Day detail / check sheet modal
   const [daySheetDate, setDaySheetDate] = useState<number | null>(null);
@@ -123,7 +128,7 @@ export default function App() {
   const progressPercent = isCurrentMonth ? (now.getDate() / daysInMonth) * 100 : (isPastMonth ? 100 : 0);
 
   // Save view mode preference
-  const handleSetViewMode = (mode: 'calendar' | 'table') => {
+  const handleSetViewMode = (mode: 'calendar' | 'year' | 'table') => {
     setViewMode(mode);
     localStorage.setItem('logseq_habit_view_mode', mode);
   };
@@ -146,8 +151,13 @@ export default function App() {
     setLoading(true);
     setErrorMsg('');
     try {
-      const records = await getMonthHabitsFromGitHub(year, month, msg => setStatusMsg(msg));
-      setHabits(records);
+      if (viewMode === 'year') {
+        const records = await getYearHabitsFromGitHub(year, msg => setStatusMsg(msg));
+        setHabits(records);
+      } else {
+        const records = await getMonthHabitsFromGitHub(year, month, msg => setStatusMsg(msg));
+        setHabits(records);
+      }
       setStatusMsg('');
     } catch (err: any) {
       console.error(err);
@@ -155,15 +165,16 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [config.token, year, month]);
+  }, [config.token, year, month, viewMode]);
 
   useEffect(() => {
     loadHabits();
   }, [loadHabits]);
 
   // Habit Toggle Handler with Optimistic UI
-  const handleToggleHabit = async (habitName: string, day: number) => {
-    const targetDateInt = parseInt(`${year}${month.toString().padStart(2, '0')}${day.toString().padStart(2, '0')}`);
+  const handleToggleHabit = async (habitName: string, day: number, overrideMonth?: number) => {
+    const m = overrideMonth || month;
+    const targetDateInt = parseInt(`${year}${m.toString().padStart(2, '0')}${day.toString().padStart(2, '0')}`);
     const record = habits.find(h => h.name === habitName && h.date === targetDateInt);
     if (!record) return;
 
@@ -200,7 +211,14 @@ export default function App() {
     });
   }, [habits]);
 
-  // Calculate habit stats for the active month
+  // Default yearly selected habit
+  useEffect(() => {
+    if (uniqueHabitNames.length > 0 && !uniqueHabitNames.includes(selectedYearlyHabit)) {
+      setSelectedYearlyHabit(uniqueHabitNames[0]);
+    }
+  }, [uniqueHabitNames, selectedYearlyHabit]);
+
+  // Calculate habit stats for active month
   const habitStats = useMemo(() => {
     const stats: Record<string, number> = {};
     uniqueHabitNames.forEach(hName => {
@@ -238,7 +256,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col font-sans select-none">
-      {/* Top Navbar */}
+      {/* Top Navbar with Safe Header for iPhone Dynamic Island */}
       <header className="sticky top-0 z-30 bg-white/90 dark:bg-gray-900/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 px-4 pb-2.5 safe-header">
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-2">
@@ -249,7 +267,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center space-x-2">
-            {/* View Mode Switcher (Calendar vs Table) */}
+            {/* View Mode Switcher: Month | Year | Table */}
             <div className="flex items-center bg-gray-100 dark:bg-gray-800 p-0.5 rounded-xl border border-gray-200 dark:border-gray-700">
               <button
                 onClick={() => handleSetViewMode('calendar')}
@@ -258,10 +276,22 @@ export default function App() {
                     ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
                     : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
                 }`}
-                title="Month Calendar View (Fits full month on screen)"
+                title="Month Calendar View"
               >
                 <CalendarDays size={14} />
                 <span className="hidden xs:inline">Month</span>
+              </button>
+              <button
+                onClick={() => handleSetViewMode('year')}
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg transition-all ${
+                  viewMode === 'year'
+                    ? 'bg-white dark:bg-gray-700 text-blue-600 dark:text-blue-400 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-900 dark:hover:text-gray-200'
+                }`}
+                title="Yearly Dashboard (12-Month Calendar)"
+              >
+                <CalendarRange size={14} />
+                <span className="hidden xs:inline">Year</span>
               </button>
               <button
                 onClick={() => handleSetViewMode('table')}
@@ -317,14 +347,20 @@ export default function App() {
 
         {/* Dashboard Card */}
         <div className="w-full bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col overflow-hidden">
-          {/* Header Controls: Month navigation + Year progress */}
+          {/* Header Controls */}
           <div className="p-3.5 sm:p-5 border-b border-gray-100 dark:border-gray-800">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-2 sm:space-x-3">
                 <button
-                  onClick={() => setCurrentDate(prev => subMonths(prev, 1))}
+                  onClick={() => {
+                    if (viewMode === 'year') {
+                      setCurrentDate(prev => new Date(prev.getFullYear() - 1, 0, 1));
+                    } else {
+                      setCurrentDate(prev => subMonths(prev, 1));
+                    }
+                  }}
                   className="p-1.5 sm:p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active:scale-95"
-                  aria-label="Previous Month"
+                  aria-label="Previous"
                 >
                   <ChevronLeft size={20} className="text-gray-600 dark:text-gray-400" />
                 </button>
@@ -342,21 +378,27 @@ export default function App() {
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-20"
                     title="Click to jump to any date"
                   />
-                  <h2 className="text-lg sm:text-2xl font-bold text-gray-900 dark:text-gray-100 min-w-[160px] sm:min-w-[190px] text-center leading-tight group-hover:text-blue-500 transition-colors">
-                    {format(currentDate, 'MMMM yyyy')}
+                  <h2 className="text-lg sm:text-2xl font-bold text-gray-900 dark:text-gray-100 min-w-[150px] sm:min-w-[190px] text-center leading-tight group-hover:text-blue-500 transition-colors">
+                    {viewMode === 'year' ? `${year} Dashboard` : format(currentDate, 'MMMM yyyy')}
                   </h2>
                   <div className="w-full h-1 bg-gray-200 dark:bg-gray-700 mt-1 rounded-full overflow-hidden">
                     <div
                       className="h-full bg-blue-500 rounded-full transition-all duration-300"
-                      style={{ width: `${progressPercent}%` }}
+                      style={{ width: `${viewMode === 'year' ? yearProgressPercent : progressPercent}%` }}
                     />
                   </div>
                 </div>
 
                 <button
-                  onClick={() => setCurrentDate(prev => addMonths(prev, 1))}
+                  onClick={() => {
+                    if (viewMode === 'year') {
+                      setCurrentDate(prev => new Date(prev.getFullYear() + 1, 0, 1));
+                    } else {
+                      setCurrentDate(prev => addMonths(prev, 1));
+                    }
+                  }}
                   className="p-1.5 sm:p-2 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-full transition-colors active:scale-95"
-                  aria-label="Next Month"
+                  aria-label="Next"
                 >
                   <ChevronRight size={20} className="text-gray-600 dark:text-gray-400" />
                 </button>
@@ -399,9 +441,9 @@ export default function App() {
           )}
 
           {/* ========================================================================= */}
-          {/* VIEW 1: MONTH CALENDAR VIEW (100% VISIBLE ON MOBILE WITHOUT SCROLLING!) */}
+          {/* VIEW 1: MONTH CALENDAR VIEW (FULL MONTH VISIBLE WITHOUT HORIZONTAL SCROLL) */}
           {/* ========================================================================= */}
-          {viewMode === 'calendar' ? (
+          {viewMode === 'calendar' && (
             <div className="p-3 sm:p-5 flex flex-col">
               {/* Habit Filter Tabs */}
               <div className="flex items-center gap-1.5 overflow-x-auto custom-scrollbar pb-3 mb-2">
@@ -433,7 +475,7 @@ export default function App() {
                 ))}
               </div>
 
-              {/* Habit instruction subtitle */}
+              {/* Subtitle helper */}
               <div className="text-[11px] text-gray-500 mb-2 px-1 flex items-center justify-between">
                 <span>
                   {selectedHabit === 'all'
@@ -463,14 +505,12 @@ export default function App() {
                 ))}
               </div>
 
-              {/* 7-Column Calendar Grid (Whole Month visible at once!) */}
+              {/* 7-Column Calendar Grid */}
               <div className="grid grid-cols-7 gap-1 sm:gap-2">
-                {/* Empty cells before day 1 */}
                 {emptyPaddingDays.map(i => (
                   <div key={`empty-${i}`} className="aspect-square rounded-xl bg-transparent" />
                 ))}
 
-                {/* Day cells (1 to 31) */}
                 {daysArray.map(day => {
                   const dateObj = new Date(year, month - 1, day);
                   const targetDateInt = parseInt(`${year}${month.toString().padStart(2, '0')}${day.toString().padStart(2, '0')}`);
@@ -482,13 +522,11 @@ export default function App() {
                   const mySchoolHolidays = isMYSchoolHoliday(dateObj);
                   const bdays = getBirthdays(dateObj);
 
-                  // Single habit mode
                   const singleRecord = selectedHabit !== 'all' 
                     ? habits.find(h => h.name === selectedHabit && h.date === targetDateInt)
                     : null;
                   const isSingleCompleted = singleRecord?.completed;
 
-                  // All habits mode stats for this day
                   let completedCountForDay = 0;
                   let totalHabitsForDay = 0;
                   uniqueHabitNames.forEach(hName => {
@@ -527,7 +565,6 @@ export default function App() {
                           : 'bg-gray-50/80 dark:bg-gray-800/20 border border-gray-100 dark:border-gray-800'
                       }`}
                     >
-                      {/* Background Holiday Markers */}
                       {mySchoolHolidays && (
                         <span className="absolute inset-0 flex items-center justify-center text-green-500/20 text-3xl sm:text-4xl leading-none select-none z-0 pointer-events-none mt-1">
                           ■
@@ -544,7 +581,6 @@ export default function App() {
                         </span>
                       )}
 
-                      {/* Top Header: Day number + Birthday Cake */}
                       <div className="flex items-center justify-between w-full relative z-10">
                         <span
                           className={`text-xs sm:text-sm font-bold ${
@@ -560,7 +596,6 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* Bottom Area: Checkmark or Completion Dots */}
                       <div className="w-full flex items-center justify-center relative z-10 mt-auto">
                         {selectedHabit !== 'all' ? (
                           isSingleCompleted ? (
@@ -569,7 +604,6 @@ export default function App() {
                             <div className="w-1.5 h-1.5 rounded-full bg-gray-300 dark:bg-gray-600" />
                           )
                         ) : (
-                          // All habits mode: show completion pill e.g. 4/5
                           totalHabitsForDay > 0 ? (
                             <span
                               className={`text-[9px] sm:text-[10px] font-bold px-1.5 py-0.2 rounded-md ${
@@ -592,12 +626,164 @@ export default function App() {
                 })}
               </div>
             </div>
-          ) : (
-            /* ========================================================================= */
-            /* VIEW 2: MATRIX TABLE VIEW (CLASSIC DETAILED VIEW WITH COMPACT TOGGLE) */
-            /* ========================================================================= */
+          )}
+
+          {/* ========================================================================= */}
+          {/* VIEW 2: YEARLY DASHBOARD VIEW (12-MONTH OVERVIEW LIKE LOGSEQ PLUGIN) */}
+          {/* ========================================================================= */}
+          {viewMode === 'year' && (
+            <div className="p-3 sm:p-5 flex flex-col">
+              {/* Habit Selector for Yearly View */}
+              <div className="flex items-center gap-2 overflow-x-auto custom-scrollbar pb-3 mb-4">
+                <span className="text-xs font-bold text-gray-400 uppercase tracking-wider shrink-0">
+                  Select Habit:
+                </span>
+                {uniqueHabitNames.map(name => {
+                  let yearCompleted = 0;
+                  habits.forEach(h => {
+                    if (h.name === name && h.completed) yearCompleted++;
+                  });
+
+                  return (
+                    <button
+                      key={name}
+                      onClick={() => setSelectedYearlyHabit(name)}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                        selectedYearlyHabit === name
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200'
+                      }`}
+                    >
+                      <span>{name}</span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-md bg-black/10 dark:bg-white/10 font-bold">
+                        {yearCompleted}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* 12 Months Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-6">
+                {MONTHS_LIST.map(monthIndex => {
+                  const monthDate = new Date(year, monthIndex, 1);
+                  const monthName = format(monthDate, 'MMMM');
+                  const daysInM = getDaysInMonth(monthDate);
+                  const firstDayOfWeek = getDay(monthDate);
+                  const monthDaysArray = Array.from({ length: daysInM }, (_, i) => i + 1);
+                  const emptyPaddings = Array.from({ length: firstDayOfWeek }, (_, i) => i);
+
+                  let completedInMonth = 0;
+                  let trackedInMonth = 0;
+                  monthDaysArray.forEach(d => {
+                    const dInt = parseInt(`${year}${(monthIndex + 1).toString().padStart(2, '0')}${d.toString().padStart(2, '0')}`);
+                    const rec = habits.find(h => h.name === selectedYearlyHabit && h.date === dInt);
+                    if (rec) {
+                      trackedInMonth++;
+                      if (rec.completed) completedInMonth++;
+                    }
+                  });
+
+                  return (
+                    <div
+                      key={monthIndex}
+                      className="bg-gray-50 dark:bg-gray-800/40 rounded-2xl p-4 border border-gray-100 dark:border-gray-800 flex flex-col"
+                    >
+                      {/* Month Card Header */}
+                      <div className="flex justify-between items-center mb-3">
+                        <button
+                          onClick={() => {
+                            setCurrentDate(new Date(year, monthIndex, 1));
+                            handleSetViewMode('calendar');
+                          }}
+                          className="text-base font-bold text-gray-800 dark:text-gray-200 hover:text-blue-500 flex items-center gap-1 transition-colors"
+                        >
+                          {monthName}
+                        </button>
+                        <span className="text-xs font-semibold px-2 py-0.5 bg-white dark:bg-gray-900 rounded-md text-gray-500 border border-gray-200 dark:border-gray-700">
+                          {completedInMonth}/{daysInM}
+                        </span>
+                      </div>
+
+                      {/* Weekday Initials */}
+                      <div className="grid grid-cols-7 gap-1 mb-1 text-center">
+                        {YEAR_WEEKDAYS.map((wd, i) => (
+                          <div key={`ywd-${i}`} className="text-[10px] font-bold text-gray-400">
+                            {wd}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Month Days Grid */}
+                      <div className="grid grid-cols-7 gap-1">
+                        {emptyPaddings.map(i => (
+                          <div key={`yempty-${i}`} className="aspect-square" />
+                        ))}
+
+                        {monthDaysArray.map(d => {
+                          const targetDateInt = parseInt(`${year}${(monthIndex + 1).toString().padStart(2, '0')}${d.toString().padStart(2, '0')}`);
+                          const record = habits.find(h => h.name === selectedYearlyHabit && h.date === targetDateInt);
+                          const isCompleted = record?.completed;
+                          const dateObj = new Date(year, monthIndex, d);
+                          const isWeekend = getDay(dateObj) === 0 || getDay(dateObj) === 6;
+
+                          const myHolidays = hdMY.isHoliday(dateObj);
+                          const auHolidays = hdAU.isHoliday(dateObj);
+                          const mySchoolHolidays = isMYSchoolHoliday(dateObj);
+                          const bdays = getBirthdays(dateObj);
+
+                          return (
+                            <div
+                              key={d}
+                              onClick={() => handleToggleHabit(selectedYearlyHabit, d, monthIndex + 1)}
+                              className={`aspect-square rounded flex items-center justify-center text-xs font-medium transition-all relative overflow-hidden cursor-pointer active:scale-90 ${
+                                !record
+                                  ? isWeekend
+                                    ? 'bg-gray-300/40 dark:bg-gray-700/40 text-gray-400'
+                                    : 'bg-transparent text-gray-300 dark:text-gray-600'
+                                  : isCompleted
+                                  ? 'bg-green-500 text-white font-bold shadow-sm'
+                                  : 'bg-gray-200 dark:bg-gray-700 text-gray-500 dark:text-gray-400'
+                              }`}
+                              title={`${monthName} ${d}: ${isCompleted ? 'Completed' : 'Missed'}`}
+                            >
+                              <span className="relative z-10 text-[11px]">{d}</span>
+                              {mySchoolHolidays && (
+                                <span className="absolute inset-0 flex items-center justify-center text-green-500/20 text-2xl leading-none select-none z-0 pointer-events-none mt-0.5">
+                                  ■
+                                </span>
+                              )}
+                              {myHolidays && (
+                                <span className="absolute inset-0 flex items-center justify-center text-yellow-500/75 text-lg leading-none select-none z-0 pointer-events-none">
+                                  ★
+                                </span>
+                              )}
+                              {auHolidays && (
+                                <span className="absolute inset-0 flex items-center justify-center text-blue-500/75 text-lg leading-none select-none z-0 pointer-events-none">
+                                  ●
+                                </span>
+                              )}
+                              {bdays.length > 0 && (
+                                <span className="absolute top-[1px] right-[1px] flex items-center justify-center text-[6px] leading-none select-none z-10 pointer-events-none">
+                                  🎂
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* ========================================================================= */}
+          {/* VIEW 3: MATRIX TABLE VIEW (CLASSIC SCROLLABLE TABLE WITH COMPACT ZOOM) */}
+          {/* ========================================================================= */}
+          {viewMode === 'table' && (
             <div className="flex flex-col">
-              {/* Table Controls (Compact toggle) */}
               <div className="px-4 py-2 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between bg-gray-50/50 dark:bg-gray-900/50 text-xs text-gray-500">
                 <span>Swipe horizontally to see days 1–{daysInMonth}</span>
                 <button
@@ -778,25 +964,25 @@ export default function App() {
               </span>
             </div>
             <div className="text-[11px] text-gray-400">
-              {viewMode === 'calendar' ? 'Month view • Tap to check' : 'Tip: Turn phone landscape for full table'}
+              {viewMode === 'year'
+                ? 'Yearly 12-Month View • Tap any month title to open month'
+                : viewMode === 'calendar'
+                ? 'Month view • Tap to check'
+                : 'Tip: Turn phone landscape for full table'}
             </div>
           </div>
         </div>
       </main>
 
-      {/* ========================================================================= */}
       {/* DAY HABITS CHECKLIST BOTTOM SHEET (FOR MOBILE QUICK CHECKING) */}
-      {/* ========================================================================= */}
       {daySheetDate && selectedDayObj && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in">
           <div className="bg-white dark:bg-gray-900 rounded-t-3xl sm:rounded-2xl max-w-md w-full border border-gray-200 dark:border-gray-800 shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
-            {/* Sheet Header */}
             <div className="p-4 sm:p-5 border-b border-gray-100 dark:border-gray-800 flex justify-between items-center bg-gray-50/50 dark:bg-gray-850">
               <div>
                 <h3 className="font-bold text-base sm:text-lg text-gray-900 dark:text-gray-100">
                   {format(selectedDayObj, 'EEEE, d MMMM yyyy')}
                 </h3>
-                {/* Holiday / Birthday tags */}
                 <div className="flex flex-wrap gap-1.5 mt-1 text-xs">
                   {getBirthdays(selectedDayObj).map(b => (
                     <span key={b} className="px-2 py-0.5 rounded-full bg-pink-100 dark:bg-pink-950/60 text-pink-700 dark:text-pink-300 font-semibold flex items-center gap-1">
@@ -826,7 +1012,6 @@ export default function App() {
               </button>
             </div>
 
-            {/* Habit Items Checklist */}
             <div className="p-4 overflow-y-auto space-y-2 flex-1">
               <p className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-2">
                 Habits for this day

@@ -255,9 +255,15 @@ export default function App() {
   }, [daySheetDate]);
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col font-sans select-none">
-      {/* Top Navbar with Safe Header for iPhone Dynamic Island */}
-      <header className="sticky top-0 z-30 bg-white/90 dark:bg-gray-900/90 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 px-4 pb-2.5 safe-header">
+    <div 
+      style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+      className="min-h-screen bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col font-sans select-none"
+    >
+      {/* Top Navbar */}
+      <header 
+        style={{ paddingTop: 'max(env(safe-area-inset-top, 0px), 16px)' }}
+        className="sticky top-0 z-30 bg-white/95 dark:bg-gray-900/95 backdrop-blur-md border-b border-gray-200 dark:border-gray-800 px-4 pb-3 shadow-sm"
+      >
         <div className="max-w-7xl mx-auto flex items-center justify-between">
           <div className="flex items-center space-x-2">
             <span className="text-xl">📅</span>

@@ -106,6 +106,7 @@ export default function App() {
   // Day detail / check sheet modal
   const [daySheetDate, setDaySheetDate] = useState<number | null>(null);
   const [detailModal, setDetailModal] = useState<{ title: string; content: string } | null>(null);
+  const [syncingKey, setSyncingKey] = useState<string | null>(null);
 
   // Table compact zoom state
   const [compactTable, setCompactTable] = useState<boolean>(false);
@@ -186,9 +187,16 @@ export default function App() {
   }, [loadHabits]);
 
   // Habit Toggle Handler with Optimistic UI & Auto-Create on untracked days
-  const handleToggleHabit = async (habitName: string, day: number, overrideMonth?: number) => {
+  const handleToggleHabit = async (habitName: string, day: number, overrideMonth?: number, overrideYear?: number) => {
+    const y = overrideYear || year;
     const m = overrideMonth || month;
-    const targetDateInt = parseInt(`${year}${m.toString().padStart(2, '0')}${day.toString().padStart(2, '0')}`);
+    const targetDateInt = parseInt(`${y}${m.toString().padStart(2, '0')}${day.toString().padStart(2, '0')}`);
+    const key = `${targetDateInt}_${habitName}`;
+
+    // Prevent concurrent taps on the same habit
+    if (syncingKey === key) return;
+    setSyncingKey(key);
+
     const record = habits.find(h => h.name === habitName && h.date === targetDateInt);
     const newCompleted = record ? !record.completed : true;
 
@@ -199,7 +207,7 @@ export default function App() {
       );
     } else {
       const optimisticRecord: HabitRecord = {
-        id: `${targetDateInt}_${habitName}`,
+        id: key,
         name: habitName,
         date: targetDateInt,
         completed: true,
@@ -227,8 +235,10 @@ export default function App() {
           prev.map(h => (h.id === record.id ? { ...h, completed: record.completed } : h))
         );
       } else {
-        setHabits(prev => prev.filter(h => h.id !== `${targetDateInt}_${habitName}`));
+        setHabits(prev => prev.filter(h => h.id !== key));
       }
+    } finally {
+      setSyncingKey(null);
     }
   };
 
@@ -774,7 +784,7 @@ export default function App() {
                           return (
                             <div
                               key={d}
-                              onClick={() => handleToggleHabit(selectedYearlyHabit, d, monthIndex + 1)}
+                              onClick={() => handleToggleHabit(selectedYearlyHabit, d, monthIndex + 1, year)}
                               className={`aspect-square rounded flex items-center justify-center text-xs font-medium transition-all relative overflow-hidden cursor-pointer active:scale-90 ${
                                 !record
                                   ? isWeekend
@@ -1065,15 +1075,22 @@ export default function App() {
                 const dayInt = daySheetDate;
                 const record = habits.find(h => h.name === hName && h.date === dayInt);
                 const isCompleted = record?.completed;
+                const itemKey = `${dayInt}_${hName}`;
+                const isSyncing = syncingKey === itemKey;
 
                 return (
                   <div
                     key={hName}
                     onClick={() => {
-                      const dayNum = parseInt(dayInt.toString().substring(6, 8));
-                      handleToggleHabit(hName, dayNum);
+                      if (isSyncing) return;
+                      const y = parseInt(dayInt.toString().substring(0, 4));
+                      const m = parseInt(dayInt.toString().substring(4, 6));
+                      const d = parseInt(dayInt.toString().substring(6, 8));
+                      handleToggleHabit(hName, d, m, y);
                     }}
                     className={`p-3 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
+                      isSyncing ? 'opacity-60 pointer-events-none' : ''
+                    } ${
                       isCompleted
                         ? 'bg-green-50/80 dark:bg-green-950/30 border-green-200 dark:border-green-800'
                         : 'bg-white dark:bg-gray-800/60 border-gray-200 dark:border-gray-700 hover:border-blue-400'
@@ -1100,7 +1117,11 @@ export default function App() {
                           : 'border-2 border-gray-300 dark:border-gray-600'
                       }`}
                     >
-                      {isCompleted && <Check size={18} strokeWidth={3} />}
+                      {isSyncing ? (
+                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" />
+                      ) : isCompleted ? (
+                        <Check size={18} strokeWidth={3} />
+                      ) : null}
                     </div>
                   </div>
                 );

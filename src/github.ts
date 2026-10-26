@@ -139,9 +139,9 @@ function utf8ToBase64(str: string): string {
   return btoa(binary);
 }
 
-// Fetch tree list of all files in journals/ folder
+// Fetch tree list of all files in journals/ folder (with cache buster)
 async function fetchJournalFileList(config: GitHubConfig): Promise<{ path: string; sha: string }[]> {
-  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/git/trees/${config.branch}?recursive=1`;
+  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/git/trees/${config.branch}?recursive=1&_t=${Date.now()}`;
 
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github.v3+json',
@@ -174,7 +174,7 @@ async function fetchFileContent(config: GitHubConfig, path: string, sha: string)
     return cached;
   }
 
-  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${path}?ref=${config.branch}`;
+  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${path}?ref=${config.branch}&_t=${Date.now()}`;
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github.v3+json',
   };
@@ -340,12 +340,12 @@ export async function toggleOrCreateHabitOnGitHub(
 
     if (getRes.status === 404) {
       // File does not exist yet: create new journal file with habit
-      const newContent = `- ### habit-tracker\n\t- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker\n`;
+      const newContent = `- ### habit-tracker\n\t- ${newCompletedState ? 'DONE ' : 'TODO '}${habitName} #habit-tracker\n`;
       const putRes = await fetch(putUrl, {
         method: 'PUT',
         headers: putHeaders,
         body: JSON.stringify({
-          message: `chore: track ${habitName} as ${newCompletedState ? 'DONE' : 'UNDONE'} for ${dateInt}`,
+          message: `chore: track ${habitName} as ${newCompletedState ? 'DONE' : 'TODO'} for ${dateInt}`,
           content: utf8ToBase64(newContent),
           branch: config.branch,
         }),
@@ -358,15 +358,17 @@ export async function toggleOrCreateHabitOnGitHub(
 
       const putJson = await putRes.json();
       const newSha = putJson.content?.sha || '';
-      localStorage.setItem(`${CACHE_PREFIX}file_${newSha}`, newContent);
+      try {
+        localStorage.setItem(`${CACHE_PREFIX}file_${newSha}`, newContent);
+      } catch {}
 
       return {
         id: `${dateInt}_${habitName}`,
         name: habitName,
         date: dateInt,
         completed: newCompletedState,
-        marker: newCompletedState ? 'DONE' : undefined,
-        content: `- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`,
+        marker: newCompletedState ? 'DONE' : 'TODO',
+        content: `- ${newCompletedState ? 'DONE ' : 'TODO '}${habitName} #habit-tracker`,
         filePath,
         fileSha: newSha,
       };
@@ -399,7 +401,9 @@ export async function toggleOrCreateHabitOnGitHub(
           }
         } else {
           if (/\bDONE\b/i.test(line)) {
-            lines[i] = line.replace(/\bDONE\s*/i, '');
+            lines[i] = line.replace(/\bDONE\b/i, 'TODO');
+          } else if (!/\b(?:TODO|DOING)\b/i.test(line)) {
+            lines[i] = line.replace(/^([\s\t]*-\s*)/, '$1TODO ');
           }
         }
         break;
@@ -410,20 +414,35 @@ export async function toggleOrCreateHabitOnGitHub(
       // Habit not in this journal yet - insert under habit-tracker section
       const sectionIdx = lines.findIndex(l => l.trim().toLowerCase().includes('habit-tracker'));
       if (sectionIdx !== -1) {
-        lines.splice(sectionIdx + 1, 0, `\t- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`);
+        lines.splice(sectionIdx + 1, 0, `\t- ${newCompletedState ? 'DONE ' : 'TODO '}${habitName} #habit-tracker`);
       } else {
         lines.push(`- ### habit-tracker`);
-        lines.push(`\t- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`);
+        lines.push(`\t- ${newCompletedState ? 'DONE ' : 'TODO '}${habitName} #habit-tracker`);
       }
     }
 
     const updatedContent = lines.join('\n');
 
+    // If content already matches desired state on GitHub, return immediately without empty commit
+    if (updatedContent === currentContent) {
+      return {
+        id: `${dateInt}_${habitName}`,
+        name: habitName,
+        date: dateInt,
+        completed: newCompletedState,
+        marker: newCompletedState ? 'DONE' : 'TODO',
+        content: `- ${newCompletedState ? 'DONE ' : 'TODO '}${habitName} #habit-tracker`,
+        details: existingRecord?.details,
+        filePath,
+        fileSha: currentSha,
+      };
+    }
+
     const putRes = await fetch(putUrl, {
       method: 'PUT',
       headers: putHeaders,
       body: JSON.stringify({
-        message: `chore: mark ${habitName} as ${newCompletedState ? 'DONE' : 'UNDONE'} for ${dateInt}`,
+        message: `chore: mark ${habitName} as ${newCompletedState ? 'DONE' : 'TODO'} for ${dateInt}`,
         content: utf8ToBase64(updatedContent),
         sha: currentSha,
         branch: config.branch,
@@ -444,15 +463,20 @@ export async function toggleOrCreateHabitOnGitHub(
     const putJson = await putRes.json();
     const newSha = putJson.content?.sha || currentSha;
 
-    localStorage.setItem(`${CACHE_PREFIX}file_${newSha}`, updatedContent);
+    if (currentSha) {
+      try { localStorage.removeItem(`${CACHE_PREFIX}file_${currentSha}`); } catch {}
+    }
+    try {
+      localStorage.setItem(`${CACHE_PREFIX}file_${newSha}`, updatedContent);
+    } catch {}
 
     return {
       id: `${dateInt}_${habitName}`,
       name: habitName,
       date: dateInt,
       completed: newCompletedState,
-      marker: newCompletedState ? 'DONE' : undefined,
-      content: `- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`,
+      marker: newCompletedState ? 'DONE' : 'TODO',
+      content: `- ${newCompletedState ? 'DONE ' : 'TODO '}${habitName} #habit-tracker`,
       details: existingRecord?.details,
       filePath,
       fileSha: newSha,

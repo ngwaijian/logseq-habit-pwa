@@ -30,7 +30,7 @@ import {
   saveGitHubConfig, 
   getMonthHabitsFromGitHub, 
   getYearHabitsFromGitHub,
-  toggleHabitOnGitHub 
+  toggleOrCreateHabitOnGitHub 
 } from './github';
 
 const hdMY = new Holidays('MY');
@@ -171,31 +171,50 @@ export default function App() {
     loadHabits();
   }, [loadHabits]);
 
-  // Habit Toggle Handler with Optimistic UI
+  // Habit Toggle Handler with Optimistic UI & Auto-Create on untracked days
   const handleToggleHabit = async (habitName: string, day: number, overrideMonth?: number) => {
     const m = overrideMonth || month;
     const targetDateInt = parseInt(`${year}${m.toString().padStart(2, '0')}${day.toString().padStart(2, '0')}`);
     const record = habits.find(h => h.name === habitName && h.date === targetDateInt);
-    if (!record) return;
-
-    const newCompleted = !record.completed;
+    const newCompleted = record ? !record.completed : true;
 
     // Optimistic UI update
-    setHabits(prev =>
-      prev.map(h => (h.id === record.id ? { ...h, completed: newCompleted } : h))
-    );
+    if (record) {
+      setHabits(prev =>
+        prev.map(h => (h.id === record.id ? { ...h, completed: newCompleted } : h))
+      );
+    } else {
+      const optimisticRecord: HabitRecord = {
+        id: `${targetDateInt}_${habitName}`,
+        name: habitName,
+        date: targetDateInt,
+        completed: true,
+        marker: 'DONE',
+        content: `- DONE ${habitName} #habit-tracker`,
+      };
+      setHabits(prev => [...prev, optimisticRecord]);
+    }
 
     try {
-      const updated = await toggleHabitOnGitHub(record, newCompleted);
-      setHabits(prev =>
-        prev.map(h => (h.id === updated.id ? updated : h))
-      );
+      const updated = await toggleOrCreateHabitOnGitHub(targetDateInt, habitName, newCompleted, record);
+      setHabits(prev => {
+        const exists = prev.some(h => h.id === updated.id);
+        if (exists) {
+          return prev.map(h => (h.id === updated.id ? updated : h));
+        } else {
+          return [...prev, updated];
+        }
+      });
     } catch (err: any) {
       alert(`Sync failed: ${err.message}`);
       // Revert optimistic update
-      setHabits(prev =>
-        prev.map(h => (h.id === record.id ? { ...h, completed: record.completed } : h))
-      );
+      if (record) {
+        setHabits(prev =>
+          prev.map(h => (h.id === record.id ? { ...h, completed: record.completed } : h))
+        );
+      } else {
+        setHabits(prev => prev.filter(h => h.id !== `${targetDateInt}_${habitName}`));
+      }
     }
   };
 
@@ -923,19 +942,25 @@ export default function App() {
                                         });
                                       }
                                     }}
-                                    disabled={!record}
-                                    className={`mx-auto rounded flex items-center justify-center transition-all ${
+                                    title={
+                                      record?.details
+                                        ? `Details:\n${record.details}`
+                                        : isCompleted
+                                        ? 'Completed (Click to undo)'
+                                        : 'Click to mark DONE'
+                                    }
+                                    className={`mx-auto rounded flex items-center justify-center transition-all cursor-pointer ${
                                       compactTable ? 'w-5 h-5' : 'w-6 h-6'
                                     } ${
-                                      !record
-                                        ? isWeekend
-                                          ? 'opacity-30 cursor-not-allowed bg-gray-300 dark:bg-gray-600'
-                                          : 'opacity-10 cursor-not-allowed bg-gray-200 dark:bg-gray-700'
-                                        : isCompleted
+                                      isCompleted
                                         ? 'bg-green-500 hover:bg-green-600 text-white shadow-sm scale-105 active:scale-95'
+                                        : record
+                                        ? isWeekend
+                                          ? 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 active:scale-95'
+                                          : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 active:scale-95'
                                         : isWeekend
-                                        ? 'bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600 active:scale-95'
-                                        : 'bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 active:scale-95'
+                                        ? 'border border-dashed border-gray-300 dark:border-gray-600 hover:bg-green-500/20 active:scale-95'
+                                        : 'border border-dashed border-gray-200 dark:border-gray-700 hover:bg-green-500/20 active:scale-95'
                                     }`}
                                   >
                                     {isCompleted && <Check size={compactTable ? 12 : 14} strokeWidth={3} className="pointer-events-none" />}
@@ -1031,15 +1056,11 @@ export default function App() {
                   <div
                     key={hName}
                     onClick={() => {
-                      if (record) {
-                        const dayNum = parseInt(dayInt.toString().substring(6, 8));
-                        handleToggleHabit(hName, dayNum);
-                      }
+                      const dayNum = parseInt(dayInt.toString().substring(6, 8));
+                      handleToggleHabit(hName, dayNum);
                     }}
                     className={`p-3 rounded-xl border flex items-center justify-between transition-all cursor-pointer ${
-                      !record
-                        ? 'opacity-40 bg-gray-50 dark:bg-gray-800/20 border-gray-100 dark:border-gray-800 cursor-not-allowed'
-                        : isCompleted
+                      isCompleted
                         ? 'bg-green-50/80 dark:bg-green-950/30 border-green-200 dark:border-green-800'
                         : 'bg-white dark:bg-gray-800/60 border-gray-200 dark:border-gray-700 hover:border-blue-400'
                     }`}
@@ -1054,7 +1075,7 @@ export default function App() {
                         </p>
                       )}
                       {!record && (
-                        <p className="text-[11px] text-gray-400">Not tracked in this journal</p>
+                        <p className="text-[11px] text-gray-400">Click to track on this day</p>
                       )}
                     </div>
 

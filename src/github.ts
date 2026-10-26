@@ -302,93 +302,168 @@ export async function getYearHabitsFromGitHub(year: number, onProgress?: (msg: s
   return records;
 }
 
-// Toggle habit checkmark and update GitHub
-export async function toggleHabitOnGitHub(record: HabitRecord, newCompletedState: boolean): Promise<HabitRecord> {
+// Toggle or create habit checkmark and update GitHub safely (with cache-busting & auto retry)
+export async function toggleOrCreateHabitOnGitHub(
+  dateInt: number, 
+  habitName: string, 
+  newCompletedState: boolean, 
+  existingRecord?: HabitRecord
+): Promise<HabitRecord> {
   const config = getGitHubConfig();
-  if (!config.token || !record.filePath) {
-    throw new Error('Missing GitHub token or file path.');
+  if (!config.token) {
+    throw new Error('Missing GitHub Personal Access Token in Settings.');
   }
 
-  // 1. Fetch the latest file from GitHub to get fresh content & fresh sha
-  const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${record.filePath}?ref=${config.branch}`;
+  const dateStr = dateInt.toString();
+  const yyyy = dateStr.substring(0, 4);
+  const mm = dateStr.substring(4, 6);
+  const dd = dateStr.substring(6, 8);
+  const filePath = existingRecord?.filePath || `${config.folder ? config.folder.replace(/\/$/, '') + '/' : ''}${yyyy}_${mm}_${dd}.md`;
+
   const headers: Record<string, string> = {
     'Accept': 'application/vnd.github.v3+json',
     'Authorization': `Bearer ${config.token.trim()}`,
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
   };
 
-  const getRes = await fetch(url, { headers });
-  if (!getRes.ok) {
-    throw new Error(`Failed to load file for update (${getRes.status})`);
-  }
-  const fileJson = await getRes.json();
-  const currentContent = base64ToUtf8(fileJson.content);
-  const currentSha = fileJson.sha;
+  const putUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${filePath}`;
 
-  // 2. Modify the line in markdown
-  const lines = currentContent.split('\n');
-  let lineModified = false;
+  // Execute with 1 automatic retry on 409 conflict
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const getUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${filePath}?ref=${config.branch}&_nocache=${Date.now()}`;
+    const getRes = await fetch(getUrl, { headers, cache: 'no-store' });
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Check if line matches this habit
-    if (/(?:#habit-tracker|\[\[habit-tracker\]\])/i.test(line) && line.toLowerCase().includes(record.name.toLowerCase())) {
-      if (newCompletedState) {
-        // Mark as DONE
-        if (/\bTODO\b/i.test(line)) {
-          lines[i] = line.replace(/\bTODO\b/i, 'DONE');
-        } else if (/\bDOING\b/i.test(line)) {
-          lines[i] = line.replace(/\bDOING\b/i, 'DONE');
-        } else if (!/\bDONE\b/i.test(line)) {
-          // Add DONE after bullet
-          lines[i] = line.replace(/^([\s\t]*-\s*)/, '$1DONE ');
-        }
-      } else {
-        // Mark as undone (replace DONE with TODO or remove DONE)
-        if (/\bDONE\b/i.test(line)) {
-          lines[i] = line.replace(/\bDONE\s*/i, '');
-        }
+    if (getRes.status === 404) {
+      // File does not exist yet: create new journal file with habit
+      const newContent = `- ### habit-tracker\n\t- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker\n`;
+      const putRes = await fetch(putUrl, {
+        method: 'PUT',
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: `chore: track ${habitName} as ${newCompletedState ? 'DONE' : 'UNDONE'} for ${dateInt}`,
+          content: utf8ToBase64(newContent),
+          branch: config.branch,
+        }),
+      });
+
+      if (!putRes.ok) {
+        const errText = await putRes.text();
+        throw new Error(`Failed to create file on GitHub (${putRes.status}): ${errText}`);
       }
-      lineModified = true;
-      break;
+
+      const putJson = await putRes.json();
+      const newSha = putJson.content?.sha || '';
+      localStorage.setItem(`${CACHE_PREFIX}file_${newSha}`, newContent);
+
+      return {
+        id: `${dateInt}_${habitName}`,
+        name: habitName,
+        date: dateInt,
+        completed: newCompletedState,
+        marker: newCompletedState ? 'DONE' : undefined,
+        content: `- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`,
+        filePath,
+        fileSha: newSha,
+      };
     }
+
+    if (!getRes.ok) {
+      const errText = await getRes.text();
+      throw new Error(`Failed to load journal file from GitHub (${getRes.status}): ${errText}`);
+    }
+
+    const fileJson = await getRes.json();
+    const currentContent = base64ToUtf8(fileJson.content);
+    const currentSha = fileJson.sha;
+
+    // Modify or insert habit line
+    const lines = currentContent.split('\n');
+    let found = false;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/(?:#habit-tracker|\[\[habit-tracker\]\])/i.test(line) && line.toLowerCase().includes(habitName.toLowerCase())) {
+        found = true;
+        if (newCompletedState) {
+          if (/\bTODO\b/i.test(line)) {
+            lines[i] = line.replace(/\bTODO\b/i, 'DONE');
+          } else if (/\bDOING\b/i.test(line)) {
+            lines[i] = line.replace(/\bDOING\b/i, 'DONE');
+          } else if (!/\bDONE\b/i.test(line)) {
+            lines[i] = line.replace(/^([\s\t]*-\s*)/, '$1DONE ');
+          }
+        } else {
+          if (/\bDONE\b/i.test(line)) {
+            lines[i] = line.replace(/\bDONE\s*/i, '');
+          }
+        }
+        break;
+      }
+    }
+
+    if (!found) {
+      // Habit not in this journal yet - insert under habit-tracker section
+      const sectionIdx = lines.findIndex(l => l.trim().toLowerCase().includes('habit-tracker'));
+      if (sectionIdx !== -1) {
+        lines.splice(sectionIdx + 1, 0, `\t- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`);
+      } else {
+        lines.push(`- ### habit-tracker`);
+        lines.push(`\t- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`);
+      }
+    }
+
+    const updatedContent = lines.join('\n');
+
+    const putRes = await fetch(putUrl, {
+      method: 'PUT',
+      headers: {
+        ...headers,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        message: `chore: mark ${habitName} as ${newCompletedState ? 'DONE' : 'UNDONE'} for ${dateInt}`,
+        content: utf8ToBase64(updatedContent),
+        sha: currentSha,
+        branch: config.branch,
+      }),
+    });
+
+    if (putRes.status === 409 && attempt === 1) {
+      // Conflict: another commit occurred. Wait 250ms and retry with fresh sha
+      await new Promise(r => setTimeout(r, 250));
+      continue;
+    }
+
+    if (!putRes.ok) {
+      const errText = await putRes.text();
+      throw new Error(`Failed to save to GitHub (${putRes.status}): ${errText}`);
+    }
+
+    const putJson = await putRes.json();
+    const newSha = putJson.content?.sha || currentSha;
+
+    localStorage.setItem(`${CACHE_PREFIX}file_${newSha}`, updatedContent);
+
+    return {
+      id: `${dateInt}_${habitName}`,
+      name: habitName,
+      date: dateInt,
+      completed: newCompletedState,
+      marker: newCompletedState ? 'DONE' : undefined,
+      content: `- ${newCompletedState ? 'DONE ' : ''}${habitName} #habit-tracker`,
+      details: existingRecord?.details,
+      filePath,
+      fileSha: newSha,
+    };
   }
 
-  if (!lineModified) {
-    throw new Error(`Could not find habit "${record.name}" in ${record.filePath}`);
-  }
-
-  const updatedContent = lines.join('\n');
-
-  // 3. Commit back to GitHub
-  const putRes = await fetch(url, {
-    method: 'PUT',
-    headers: {
-      ...headers,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      message: `chore: mark ${record.name} as ${newCompletedState ? 'DONE' : 'UNDONE'} for ${record.date}`,
-      content: utf8ToBase64(updatedContent),
-      sha: currentSha,
-      branch: config.branch,
-    }),
-  });
-
-  if (!putRes.ok) {
-    const errText = await putRes.text();
-    throw new Error(`Failed to save to GitHub (${putRes.status}): ${errText}`);
-  }
-
-  const putJson = await putRes.json();
-  const newSha = putJson.content?.sha || currentSha;
-
-  // Invalidate local cache
-  localStorage.setItem(`${CACHE_PREFIX}file_${newSha}`, updatedContent);
-
-  return {
-    ...record,
-    completed: newCompletedState,
-    marker: newCompletedState ? 'DONE' : undefined,
-    fileSha: newSha,
-  };
+  throw new Error('Failed to update after conflict retry.');
 }
+
+// Keep backward compatibility
+export const toggleHabitOnGitHub = (record: HabitRecord, newCompletedState: boolean) =>
+  toggleOrCreateHabitOnGitHub(record.date, record.name, newCompletedState, record);
